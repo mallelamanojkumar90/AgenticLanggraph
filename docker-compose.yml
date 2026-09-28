@@ -1,0 +1,14 @@
+services:
+  deep-research:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agentic-deep-research
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      # Persist generated research reports directly onto host machine
+      - ./output:/app/output
+    restart: unless-stopped
