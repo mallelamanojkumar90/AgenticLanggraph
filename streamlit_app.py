@@ -13,6 +13,7 @@ load_dotenv(ROOT_DIR / ".env")
 
 from src.config import NVIDIA_API_KEY, DEFAULT_MODEL, OUTPUT_DIR
 from src.graph import build_research_graph
+from src.state import SubTopicPlan
 from src.tools.exporter import markdown_to_pdf_bytes, markdown_to_docx_bytes
 
 st.set_page_config(
@@ -171,6 +172,57 @@ topic = st.text_area(
     height=80
 )
 
+def stream_and_display_graph(app, stream_input, config, status_box, plan_placeholder=None):
+    """Streams LangGraph execution events and dynamically updates Streamlit UI components."""
+    research_placeholder = st.container()
+    review_placeholder = st.empty()
+    verifier_placeholder = st.empty()
+    
+    for event in app.stream(stream_input, config=config, stream_mode="updates"):
+        for node_name, node_update in event.items():
+            if node_name == "planner":
+                sections = node_update.get("sections", [])
+                status_box.update(label=f"🔍 **Stage 2:** Fanning out {len(sections)} parallel researcher workers...")
+                
+                if plan_placeholder:
+                    with plan_placeholder.container():
+                        st.success(f"**Research Plan Established:** {node_update.get('plan_summary', '')}")
+                        p_cols = st.columns(len(sections))
+                        for col, s in zip(p_cols, sections):
+                            with col:
+                                st.markdown(f"**{s.title}**")
+                                st.caption(s.description)
+                                for q in s.queries:
+                                    st.code(q, language="text")
+                                
+            elif node_name == "researcher":
+                data = node_update.get("sections_data", [])
+                if data:
+                    latest = data[-1]
+                    num_scraped = sum(1 for src in latest.get('sources', []) if src.get('scraped'))
+                    with research_placeholder:
+                        st.info(f"✅ **Completed Section:** {latest.get('section_title')} — {len(latest.get('sources', []))} sources ({num_scraped} full web pages scraped)")
+                        
+            elif node_name == "reviewer":
+                is_suff = node_update.get("is_sufficient", True)
+                critique_iter = node_update.get("critique_iteration", 1)
+                if is_suff:
+                    status_box.update(label="📝 **Stage 3:** Research approved! Synthesizing final report...")
+                    review_placeholder.success(f"⚖️ **Reviewer Node (Pass {critique_iter}):** {node_update.get('review_feedback')}")
+                else:
+                    status_box.update(label=f"🔄 **Stage 2 (Reflection Loop {critique_iter}):** Investigating identified research gaps...")
+                    review_placeholder.warning(f"⚖️ **Reviewer Gaps Detected:** {node_update.get('review_feedback')}")
+                    
+            elif node_name == "writer":
+                status_box.update(label="🛡️ **Stage 4:** Report written! Verifying factual citations & links...")
+                
+            elif node_name == "verifier":
+                score = node_update.get("verification_score", 100.0)
+                feedback = node_update.get("verification_feedback", "")
+                verifier_placeholder.success(f"🛡️ **Fact-Check & Citation Audit ({score:.1f}%):** {feedback}")
+                status_box.update(label="✅ **Research, Synthesis & Fact-Checking Complete!**", state="complete")
+
+
 start_research = st.button("🚀 Start Deep Research", type="primary", use_container_width=True)
 
 if start_research:
@@ -180,6 +232,11 @@ if start_research:
     if not topic.strip():
         st.warning("⚠️ Please provide a research topic to proceed.")
         st.stop()
+
+    # Reset any lingering HITL review state
+    st.session_state["hitl_paused"] = False
+    st.session_state["hitl_thread_id"] = None
+    st.session_state["hitl_sections"] = []
 
     st.write("---")
     
@@ -213,60 +270,131 @@ if start_research:
         
         status_box.update(label="🧠 **Stage 1:** Planner Node decomposing research strategy...")
         plan_placeholder = st.empty()
-        research_placeholder = st.container()
-        review_placeholder = st.empty()
-        verifier_placeholder = st.empty()
         
-        for event in app.stream(initial_state, config=config, stream_mode="updates"):
-            for node_name, node_update in event.items():
-                if node_name == "planner":
-                    sections = node_update.get("sections", [])
-                    status_box.update(label=f"🔍 **Stage 2:** Fanning out {len(sections)} parallel researcher workers...")
-                    
-                    with plan_placeholder.container():
-                        st.success(f"**Research Plan Established:** {node_update.get('plan_summary', '')}")
-                        p_cols = st.columns(len(sections))
-                        for col, s in zip(p_cols, sections):
-                            with col:
-                                st.markdown(f"**{s.title}**")
-                                st.caption(s.description)
-                                for q in s.queries:
-                                    st.code(q, language="text")
-                                    
-                elif node_name == "researcher":
-                    data = node_update.get("sections_data", [])
-                    if data:
-                        latest = data[-1]
-                        num_scraped = sum(1 for src in latest.get('sources', []) if src.get('scraped'))
-                        with research_placeholder:
-                            st.info(f"✅ **Completed Section:** {latest.get('section_title')} — {len(latest.get('sources', []))} sources ({num_scraped} full web pages scraped)")
-                            
-                elif node_name == "reviewer":
-                    is_suff = node_update.get("is_sufficient", True)
-                    critique_iter = node_update.get("critique_iteration", 1)
-                    if is_suff:
-                        status_box.update(label="📝 **Stage 3:** Research approved! Synthesizing final report...")
-                        review_placeholder.success(f"⚖️ **Reviewer Node (Pass {critique_iter}):** {node_update.get('review_feedback')}")
-                    else:
-                        status_box.update(label=f"🔄 **Stage 2 (Reflection Loop {critique_iter}):** Investigating identified research gaps...")
-                        review_placeholder.warning(f"⚖️ **Reviewer Gaps Detected:** {node_update.get('review_feedback')}")
-                        
-                elif node_name == "writer":
-                    status_box.update(label="🛡️ **Stage 4:** Report written! Verifying factual citations & links...")
-                    
-                elif node_name == "verifier":
-                    score = node_update.get("verification_score", 100.0)
-                    feedback = node_update.get("verification_feedback", "")
-                    verifier_placeholder.success(f"🛡️ **Fact-Check & Citation Audit ({score:.1f}%):** {feedback}")
-                    status_box.update(label="✅ **Research, Synthesis & Fact-Checking Complete!**", state="complete")
+        stream_and_display_graph(app, initial_state, config, status_box, plan_placeholder=plan_placeholder)
 
-        # Snapshot final state
         state_snapshot = app.get_state(config)
-        st.session_state["latest_research"] = state_snapshot.values
-        st.session_state["chat_messages"] = []
+        
+        # Check if execution paused at an interrupt (e.g. Human-in-the-Loop review)
+        if state_snapshot.next:
+            status_box.update(label="⏸️ **Stage 1 Complete:** Research strategy planned. Awaiting review below...", state="complete")
+            st.session_state["hitl_paused"] = True
+            st.session_state["hitl_thread_id"] = thread_id
+            st.session_state["hitl_topic"] = topic
+            st.session_state["hitl_plan_summary"] = state_snapshot.values.get("plan_summary", "")
+            raw_sections = state_snapshot.values.get("sections", [])
+            st.session_state["hitl_sections"] = [
+                {
+                    "title": getattr(s, "title", s.get("title", "") if isinstance(s, dict) else ""),
+                    "description": getattr(s, "description", s.get("description", "") if isinstance(s, dict) else ""),
+                    "queries": list(getattr(s, "queries", s.get("queries", []) if isinstance(s, dict) else []))
+                }
+                for s in raw_sections
+            ]
+            st.session_state["latest_research"] = None
+            st.rerun()
+        else:
+            st.session_state["latest_research"] = state_snapshot.values
+            st.session_state["chat_messages"] = []
+
+# --- HUMAN-IN-THE-LOOP PLAN REVIEW CONTAINER ---
+if st.session_state.get("hitl_paused") and st.session_state.get("hitl_thread_id"):
+    st.markdown("---")
+    st.markdown("""
+    <div style="background-color: #1e293b; border-left: 5px solid #3b82f6; padding: 16px 20px; border-radius: 8px; margin-bottom: 20px;">
+        <h3 style="margin: 0 0 8px 0; color: #60a5fa;">⏸️ Human-in-the-Loop: Review & Approve Research Plan</h3>
+        <p style="margin: 0; color: #cbd5e1; font-size: 0.95rem;">
+            The <b>Planner Agent</b> has structured the research strategy below. 
+            You can inspect, refine, add, or remove subtopics and targeted search queries before fanning out autonomous web researcher workers.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.info(f"📋 **Strategy Summary:** {st.session_state.get('hitl_plan_summary', '')}")
+    
+    current_sections = st.session_state.get("hitl_sections", [])
+    
+    col_hdr, col_add = st.columns([3, 1])
+    with col_hdr:
+        st.subheader(f"Proposed Research Subtopics ({len(current_sections)})")
+    with col_add:
+        if st.button("➕ Add Another Subtopic", use_container_width=True):
+            current_sections.append({
+                "title": f"Subtopic {len(current_sections) + 1}",
+                "description": f"Targeted exploration of {st.session_state.get('hitl_topic', 'the topic')}",
+                "queries": [f"{st.session_state.get('hitl_topic', '')} analysis"]
+            })
+            st.session_state["hitl_sections"] = current_sections
+            st.rerun()
+
+    for idx, s in enumerate(current_sections):
+        with st.expander(f"📌 Subtopic {idx+1}: {s.get('title')}", expanded=True):
+            c_title, c_del = st.columns([5, 1])
+            with c_title:
+                t = st.text_input("Subtopic Title", value=s.get("title", ""), key=f"hitl_title_{idx}")
+            with c_del:
+                st.write("")
+                st.write("")
+                if len(current_sections) > 1:
+                    if st.button("🗑️ Remove", key=f"hitl_del_{idx}", use_container_width=True):
+                        current_sections.pop(idx)
+                        st.session_state["hitl_sections"] = current_sections
+                        st.rerun()
+            d = st.text_input("Description / Scope", value=s.get("description", ""), key=f"hitl_desc_{idx}")
+            q_str = st.text_area(
+                "Search Queries (one query per line)",
+                value="\n".join(s.get("queries", [])),
+                key=f"hitl_queries_{idx}",
+                help="These queries will be executed concurrently across DuckDuckGo"
+            )
+
+    st.write("")
+    btn_approve, btn_cancel = st.columns([3, 1])
+    with btn_approve:
+        approve_action = st.button("🚀 Approve Plan & Fan Out Deep Research", type="primary", use_container_width=True)
+    with btn_cancel:
+        cancel_action = st.button("❌ Discard Plan", use_container_width=True)
+
+    if cancel_action:
+        st.session_state["hitl_paused"] = False
+        st.session_state["hitl_thread_id"] = None
+        st.session_state["hitl_sections"] = []
+        st.rerun()
+
+    if approve_action:
+        updated_sections = []
+        for idx in range(len(current_sections)):
+            t = st.session_state.get(f"hitl_title_{idx}", "").strip()
+            d = st.session_state.get(f"hitl_desc_{idx}", "").strip()
+            q_raw = st.session_state.get(f"hitl_queries_{idx}", "").strip()
+            q_lines = [line.strip() for line in q_raw.splitlines() if line.strip()]
+            if t:
+                updated_sections.append(SubTopicPlan(title=t, description=d or t, queries=q_lines or [t]))
+        
+        if not updated_sections:
+            st.error("⚠️ At least one valid research subtopic is required to proceed.")
+            st.stop()
+
+        with st.status("🚀 Resuming Deep Research & Synthesis...", expanded=True) as resume_box:
+            app = build_research_graph(enable_memory=True, persistent=True)
+            config = {"configurable": {"thread_id": st.session_state["hitl_thread_id"]}}
+            
+            # Update the checkpoint state with human-approved sections as_node="planner"
+            app.update_state(config, {"sections": updated_sections}, as_node="planner")
+            
+            # Resume graph execution (input=None tells LangGraph to continue from checkpoint)
+            stream_and_display_graph(app, None, config, resume_box)
+            
+            final_snapshot = app.get_state(config)
+            st.session_state["latest_research"] = final_snapshot.values
+            st.session_state["hitl_paused"] = False
+            st.session_state["hitl_thread_id"] = None
+            st.session_state["hitl_sections"] = []
+            st.session_state["chat_messages"] = []
+            st.rerun()
 
 # --- DISPLAY RESULTS TABS ---
-if "latest_research" in st.session_state:
+if st.session_state.get("latest_research") and st.session_state["latest_research"].get("final_report"):
     res = st.session_state["latest_research"]
     final_report = res.get("final_report", "")
     sections_data = res.get("sections_data", [])
