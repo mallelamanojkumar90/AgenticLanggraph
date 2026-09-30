@@ -33,6 +33,7 @@ class SubTopicTask(TypedDict):
     section_title: str
     description: str
     queries: List[str]
+    private_docs: Optional[List[Dict[str, Any]]]
 
 class ResearchState(TypedDict):
     """The master state of the Deep Research graph."""
@@ -51,4 +52,7 @@ class ResearchState(TypedDict):
     verification_feedback: str
     verified_sources_count: int
     flagged_sources_count: int
+    private_docs_context: Optional[List[Dict[str, Any]]]
+    audio_script: Optional[str]
+    audio_path: Optional[str]
     status_message: str

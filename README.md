@@ -114,16 +114,18 @@ AgenticLanggraph/
 │   ├── config.py          # Settings & NVIDIA NIM client configuration
 │   ├── state.py           # TypedDict states & Pydantic output schemas
 │   ├── tools/
-│   │   ├── search.py      # Resilient DuckDuckGo web search tool
-│   │   ├── scraper.py     # Dual-tier web scraper (Jina Reader + direct lxml)
-│   │   └── exporter.py    # Multi-format exporter (PDF, Word .docx, Mermaid)
+│   │   ├── search.py          # Resilient DuckDuckGo web search tool
+│   │   ├── scraper.py         # Dual-tier web scraper (Jina Reader + direct lxml)
+│   │   ├── document_loader.py # Hybrid RAG document loader (PDF, DOCX, TXT, MD)
+│   │   ├── audio.py           # NotebookLM-style 2-host audio podcast & briefing generator
+│   │   └── exporter.py        # Multi-format exporter (PDF, Word .docx, Mermaid)
 │   ├── nodes/
-│   │   ├── planner.py     # Decomposes queries into structured subtopics
-│   │   ├── researcher.py  # Map-worker node searching, scraping & synthesizing
-│   │   ├── reviewer.py    # Critic node evaluating thoroughness & gaps
-│   │   ├── writer.py      # Executive report synthesizer
-│   │   └── verifier.py    # Citation grounding & hallucination auditing node
-│   ├── graph.py           # LangGraph StateGraph assembly & Send API routing
-│   └── cli.py             # Rich terminal UI & streaming execution
-└── output/                # Markdown (.md), PDF (.pdf), Word (.docx), & checkpoints.db
+│   │   ├── planner.py         # Decomposes queries into structured subtopics
+│   │   ├── researcher.py      # Map-worker searching web + private documents
+│   │   ├── reviewer.py        # Critic node evaluating thoroughness & gaps
+│   │   ├── writer.py          # Executive report synthesizer
+│   │   └── verifier.py        # Citation grounding & hallucination auditing node
+│   ├── graph.py               # LangGraph StateGraph assembly & Send API routing
+│   └── cli.py                 # Rich terminal UI & streaming execution
+└── output/                    # Reports (.md, .pdf, .docx), Podcasts (.mp3), & checkpoints.db
 ```

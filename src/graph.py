@@ -20,13 +20,15 @@ logger = logging.getLogger(__name__)
 def fan_out_research(state: ResearchState) -> List[Send]:
     """Conditional edge from planner: Fans out each sub-topic to parallel researcher workers."""
     sections = state.get("sections", [])
-    logger.info(f"Fanning out research to {len(sections)} parallel researcher nodes.")
+    private_docs = state.get("private_docs_context", []) or []
+    logger.info(f"Fanning out research to {len(sections)} parallel researcher nodes (with {len(private_docs)} private doc chunks).")
     
     return [
         Send("researcher", {
             "section_title": section.title,
             "description": section.description,
-            "queries": section.queries
+            "queries": section.queries,
+            "private_docs": private_docs
         })
         for section in sections
     ]
@@ -35,6 +37,7 @@ def route_after_review(state: ResearchState) -> Union[str, List[Send]]:
     """Conditional edge from reviewer: Either advances to writer or loops back with gap queries."""
     is_sufficient = state.get("is_sufficient", True)
     gap_queries = state.get("gap_queries", [])
+    private_docs = state.get("private_docs_context", []) or []
     
     if is_sufficient or not gap_queries:
         logger.info("Research approved by reviewer. Advancing to report synthesis.")
@@ -45,7 +48,8 @@ def route_after_review(state: ResearchState) -> Union[str, List[Send]]:
         Send("researcher", {
             "section_title": gap.title,
             "description": gap.description,
-            "queries": gap.queries
+            "queries": gap.queries,
+            "private_docs": private_docs
         })
         for gap in gap_queries
     ]

@@ -118,7 +118,21 @@ This report provides an in-depth synthesis of {topic}, compiled from multi-agent
     except Exception as e:
         logger.warning(f"Could not generate DOCX: {e}")
         
+    # Generate 2-Host Audio Podcast Briefing (MP3)
+    audio_path = None
+    audio_script = None
+    try:
+        from src.tools.audio import create_audio_briefing
+        mp3_path = OUTPUT_DIR / f"{base_name}_podcast.mp3"
+        _, audio_script = create_audio_briefing(report_content, output_path=mp3_path, style="podcast")
+        audio_path = str(mp3_path)
+        logger.info(f"Podcast MP3 saved to {mp3_path}")
+    except Exception as e:
+        logger.warning(f"Could not generate audio podcast briefing: {e}")
+        
     return {
         "final_report": report_content,
-        "status_message": f"Report generated and saved to {md_path.name} (MD, PDF, DOCX)"
+        "audio_script": audio_script,
+        "audio_path": audio_path,
+        "status_message": f"Report generated and saved to {md_path.name} (MD, PDF, DOCX, MP3)"
     }

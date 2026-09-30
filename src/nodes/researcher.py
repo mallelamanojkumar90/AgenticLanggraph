@@ -3,52 +3,80 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from src.config import get_llm, MAX_SEARCH_RESULTS
 from src.tools.search import search_web
 from src.tools.scraper import scrape_multiple_webpages
+from src.tools.document_loader import search_private_docs
 from src.state import SubTopicTask, SectionData
 
 logger = logging.getLogger(__name__)
 
 RESEARCHER_SYSTEM_PROMPT = """You are a Principal Research Analyst specializing in deep technical and industry investigation.
-Your task is to analyze raw web search results for a specific sub-topic and distill them into high-density, factual synthesis notes.
+Your task is to analyze raw web search results and internal organizational documents for a specific sub-topic and distill them into high-density, factual synthesis notes.
 
 Guidelines:
 1. Extract key facts, metrics, statistics, technical comparisons, historical milestones, and expert arguments.
-2. Maintain objectivity: present both advantages and limitations/challenges.
-3. Every major claim or data point should cite the source URL clearly like [Title](URL).
-4. Organize your notes clearly with headers and bullet points. Avoid filler text.
+2. Blend insights from internal proprietary documents with open web findings seamlessly.
+3. Maintain objectivity: present both advantages and limitations/challenges.
+4. Every major claim or data point should cite the source URL or document clearly like [Title](URL).
+5. Organize your notes clearly with headers and bullet points. Avoid filler text.
 """
 
 def conduct_research(task: SubTopicTask) -> dict:
-    """Worker node: Runs parallel search queries for a sub-topic, scrapes full content from top sources, and synthesizes findings."""
+    """Worker node: Runs parallel search queries, searches internal documents, scrapes full web content, and synthesizes findings."""
     title = task.get("section_title", "Untitled Section")
     description = task.get("description", "")
     queries = task.get("queries", [])
+    private_docs = task.get("private_docs") or []
     
-    logger.info(f"Conducting research for section: '{title}' ({len(queries)} queries)")
+    logger.info(f"Conducting research for section: '{title}' ({len(queries)} queries, {len(private_docs)} private doc chunks)")
     
     all_sources = []
     seen_urls = set()
+    collected_snippets = []
     
-    # 1. Run search for each query
+    # 1. Search private internal documents first (Hybrid RAG)
+    if private_docs:
+        combined_query = f"{title} {' '.join(queries)}"
+        matched_chunks = search_private_docs(combined_query, private_docs, top_k=2)
+        for c in matched_chunks:
+            doc_id = f"file://internal/{c['source']}/chunk_{c['chunk_id']}"
+            if doc_id not in seen_urls:
+                seen_urls.add(doc_id)
+                all_sources.append({
+                    "title": f"Internal Doc: {c['source']} (chunk {c['chunk_id']})",
+                    "url": doc_id,
+                    "snippet": c["content"][:250],
+                    "scraped": True,
+                    "content_preview": c["content"][:300],
+                    "source_type": "internal"
+                })
+                collected_snippets.append(
+                    f"- **[ORGANIZATION INTERNAL KNOWLEDGE: {c['source']}]** (Section #{c['chunk_id']}):\n  {c['content']}"
+                )
+        if matched_chunks:
+            logger.info(f"Retrieved {len(matched_chunks)} relevant internal document chunks for '{title}'")
+    
+    # 2. Run web search for each query
     for q in queries:
         results = search_web(q, max_results=2)
         for r in results:
             url = r["url"]
             if url not in seen_urls:
                 seen_urls.add(url)
+                r["source_type"] = "web"
                 all_sources.append(r)
-                if len(all_sources) >= 5:
+                if len(all_sources) >= 6:
                     break
-        if len(all_sources) >= 5:
+        if len(all_sources) >= 6:
             break
             
-    # 2. Deep scrape the top URLs for full-text context
-    urls_to_scrape = [s["url"] for s in all_sources[:3]]
-    scraped_data = scrape_multiple_webpages(urls_to_scrape, max_chars_per_page=1200)
-    logger.info(f"Deep scraped {len(scraped_data)}/{len(urls_to_scrape)} web pages for section '{title}'")
+    # 3. Deep scrape the top web URLs for full-text context
+    web_urls = [s["url"] for s in all_sources if s.get("source_type") == "web"][:3]
+    scraped_data = scrape_multiple_webpages(web_urls, max_chars_per_page=1200)
+    logger.info(f"Deep scraped {len(scraped_data)}/{len(web_urls)} web pages for section '{title}'")
     
-    # 3. Assemble evidence blocks combining scraped text and fallback snippets
-    collected_snippets = []
+    # 4. Assemble evidence blocks combining scraped text and fallback snippets
     for r in all_sources:
+        if r.get("source_type") == "internal":
+            continue
         url = r["url"]
         scraped_text = scraped_data.get(url, "")
         if scraped_text:

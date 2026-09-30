@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -106,6 +107,27 @@ with st.sidebar:
     
     st.divider()
     
+    # --- PRIVATE DOCUMENT INGESTION (HYBRID RAG) ---
+    st.subheader("📂 Internal Knowledge (Hybrid RAG)")
+    uploaded_files = st.file_uploader(
+        "Upload private docs (PDF, DOCX, TXT, MD)",
+        type=["pdf", "docx", "txt", "md"],
+        accept_multiple_files=True,
+        help="Upload internal proprietary files to ground the research with company knowledge."
+    )
+    private_chunks = []
+    if uploaded_files:
+        from src.tools.document_loader import extract_text_from_file_bytes, chunk_document
+        for f in uploaded_files:
+            b_data = f.read()
+            text = extract_text_from_file_bytes(b_data, f.name)
+            chunks = chunk_document(text, f.name)
+            private_chunks.extend(chunks)
+        st.success(f"✅ {len(uploaded_files)} file(s) ingested ({len(private_chunks)} chunks ready)")
+    st.session_state["private_docs_context"] = private_chunks
+    
+    st.divider()
+    
     # Past Reports Archive
     st.subheader("📚 Saved Reports Archive")
     saved_reports = sorted(list(OUTPUT_DIR.glob("*.md")), key=os.path.getmtime, reverse=True)
@@ -119,10 +141,10 @@ with st.sidebar:
         with open(report_path, "r", encoding="utf-8") as f:
             content = f.read()
             
-        b1, b2 = st.columns(2)
+        b1, b2, b3 = st.columns(3)
         with b1:
             st.download_button(
-                label="⬇️ Markdown",
+                label="⬇️ MD",
                 data=content,
                 file_name=selected_report,
                 mime="text/markdown",
@@ -142,6 +164,18 @@ with st.sidebar:
                 )
             except Exception:
                 pass
+        with b3:
+            mp3_candidates = list(OUTPUT_DIR.glob(f"{report_path.stem}*.mp3"))
+            if mp3_candidates:
+                with open(mp3_candidates[0], "rb") as mf:
+                    st.download_button(
+                        label="⬇️ MP3",
+                        data=mf.read(),
+                        file_name=mp3_candidates[0].name,
+                        mime="audio/mp3",
+                        key="side_dl_mp3",
+                        use_container_width=True
+                    )
     else:
         st.caption("No reports generated yet.")
 
@@ -265,6 +299,9 @@ if start_research:
             "verification_feedback": "",
             "verified_sources_count": 0,
             "flagged_sources_count": 0,
+            "private_docs_context": st.session_state.get("private_docs_context", []),
+            "audio_script": None,
+            "audio_path": None,
             "status_message": "Initializing..."
         }
         
@@ -420,11 +457,62 @@ if st.session_state.get("latest_research") and st.session_state["latest_research
     ])
     
     with tab1:
-        d1, d2, d3 = st.columns(3)
         timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        # --- AUDIO BRIEFING & PODCAST PLAYER ---
+        st.markdown("### 🎙️ NotebookLM-Style Audio Podcast & Executive Briefing")
+        
+        audio_path_str = res.get("audio_path")
+        audio_bytes = None
+        if audio_path_str and Path(audio_path_str).exists():
+            with open(audio_path_str, "rb") as af:
+                audio_bytes = af.read()
+        else:
+            # Check if matching MP3 exists in output directory
+            slug = re.sub(r'[^a-zA-Z0-9_-]', '_', res.get("topic", "research").lower()[:30]).strip('_')
+            mp3_matches = list(OUTPUT_DIR.glob(f"*{slug}*.mp3"))
+            if mp3_matches:
+                with open(mp3_matches[0], "rb") as af:
+                    audio_bytes = af.read()
+                audio_path_str = str(mp3_matches[0])
+                res["audio_path"] = audio_path_str
+
+        c_player, c_controls = st.columns([3, 2])
+        with c_player:
+            if audio_bytes:
+                st.audio(audio_bytes, format="audio/mp3")
+            else:
+                st.info("🎧 Audio briefing is ready to generate. Choose a format and click generate.")
+
+        with c_controls:
+            audio_style_sel = st.selectbox(
+                "Presentation Style:",
+                ["2-Host Dynamic Podcast (Alex & Sam)", "Executive Solo Briefing (Narrator)"],
+                index=0,
+                key="audio_style_sel"
+            )
+            if st.button("🎙️ Generate / Re-generate Audio", key="btn_gen_audio", use_container_width=True):
+                with st.spinner("🎧 Synthesizing audio episode with neural voices..."):
+                    from src.tools.audio import create_audio_briefing
+                    chosen_style = "podcast" if "2-Host" in audio_style_sel else "briefing"
+                    clean_slug = re.sub(r'[^a-zA-Z0-9_-]', '_', res.get("topic", "research").lower()[:35]).strip('_')
+                    mp3_target = OUTPUT_DIR / f"research_{clean_slug}_{timestamp_str}_podcast.mp3"
+                    audio_bytes, script = create_audio_briefing(final_report, output_path=mp3_target, style=chosen_style)
+                    res["audio_path"] = str(mp3_target)
+                    res["audio_script"] = script
+                    st.session_state["latest_research"] = res
+                    st.rerun()
+
+        if res.get("audio_script"):
+            with st.expander("📜 Read Audio Dialogue Transcript"):
+                st.markdown(res["audio_script"])
+
+        st.markdown("---")
+
+        d1, d2, d3, d4 = st.columns(4)
         with d1:
             st.download_button(
-                label="⬇️ Download Markdown (.md)",
+                label="⬇️ Markdown (.md)",
                 data=final_report,
                 file_name=f"research_{timestamp_str}.md",
                 mime="text/markdown",
@@ -435,7 +523,7 @@ if st.session_state.get("latest_research") and st.session_state["latest_research
             try:
                 pdf_data = markdown_to_pdf_bytes(final_report)
                 st.download_button(
-                    label="⬇️ Download PDF (.pdf)",
+                    label="⬇️ Adobe PDF (.pdf)",
                     data=pdf_data,
                     file_name=f"research_{timestamp_str}.pdf",
                     mime="application/pdf",
@@ -448,7 +536,7 @@ if st.session_state.get("latest_research") and st.session_state["latest_research
             try:
                 docx_data = markdown_to_docx_bytes(final_report)
                 st.download_button(
-                    label="⬇️ Download Word (.docx)",
+                    label="⬇️ Word (.docx)",
                     data=docx_data,
                     file_name=f"research_{timestamp_str}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -457,6 +545,16 @@ if st.session_state.get("latest_research") and st.session_state["latest_research
                 )
             except Exception as e:
                 st.caption(f"DOCX error: {e}")
+        with d4:
+            if audio_bytes:
+                st.download_button(
+                    label="⬇️ Audio (.mp3)",
+                    data=audio_bytes,
+                    file_name=f"research_{timestamp_str}_podcast.mp3",
+                    mime="audio/mp3",
+                    key="main_dl_mp3",
+                    use_container_width=True
+                )
                 
         st.markdown(final_report)
         
@@ -478,7 +576,12 @@ if st.session_state.get("latest_research") and st.session_state["latest_research
                     
         st.write(f"Total Unique Sources Found: **{len(all_unique_sources)}**")
         for url, src in all_unique_sources.items():
-            badge = "🟢 **[Full Page Scraped]**" if src.get("scraped") else "⚪ **[Search Snippet]**"
+            if src.get("source_type") == "internal":
+                badge = "🏢 **[Internal Document]**"
+            elif src.get("scraped"):
+                badge = "🟢 **[Full Page Scraped]**"
+            else:
+                badge = "⚪ **[Search Snippet]**"
             st.markdown(f"- {badge} [{src.get('title', url)}]({url})")
             excerpt = src.get('content_preview', src.get('snippet', ''))[:300]
             st.caption(f"Content Sample: {excerpt}...")

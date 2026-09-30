@@ -5,6 +5,8 @@ __pycache__/
 output/*.md
 output/*.pdf
 output/*.docx
+output/*.mp3
 output/*.db
 *.db
+*.mp3
 !output/.gitkeep

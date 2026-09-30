@@ -44,7 +44,7 @@ def print_banner():
     """
     console.print(banner_text, style="bold cyan")
 
-def run_research(topic: str, max_iterations: int = 1):
+def run_research(topic: str, max_iterations: int = 1, doc_paths: list = None):
     if not os.getenv("NVIDIA_API_KEY"):
         console.print(
             Panel(
@@ -59,9 +59,23 @@ def run_research(topic: str, max_iterations: int = 1):
         )
         return
 
-    console.print(Panel(f"[bold cyan]Research Topic:[/bold cyan] {topic}\n[bold cyan]Model:[/bold cyan] {DEFAULT_MODEL}", title="Starting Deep Research Session", border_style="blue"))
+    # Ingest private documents if provided (Hybrid RAG)
+    private_chunks = []
+    if doc_paths:
+        from src.tools.document_loader import extract_text_from_path, chunk_document
+        for path_str in doc_paths:
+            p = Path(path_str)
+            if p.exists():
+                text = extract_text_from_path(p)
+                chunks = chunk_document(text, p.name)
+                private_chunks.extend(chunks)
+                console.print(f"[bold green][+] Ingested Internal Doc:[/bold green] {p.name} ({len(chunks)} chunks)")
+            else:
+                console.print(f"[bold yellow][!] Warning: Document path not found:[/bold yellow] {path_str}")
+
+    console.print(Panel(f"[bold cyan]Research Topic:[/bold cyan] {topic}\n[bold cyan]Model:[/bold cyan] {DEFAULT_MODEL}\n[bold cyan]Hybrid RAG:[/bold cyan] {len(private_chunks)} internal chunks loaded", title="Starting Deep Research Session", border_style="blue"))
     
-    app = build_research_graph(enable_memory=True)
+    app = build_research_graph(enable_memory=True, persistent=True)
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
     
@@ -76,6 +90,13 @@ def run_research(topic: str, max_iterations: int = 1):
         "review_feedback": "",
         "gap_queries": [],
         "final_report": "",
+        "verification_score": 100.0,
+        "verification_feedback": "",
+        "verified_sources_count": 0,
+        "flagged_sources_count": 0,
+        "private_docs_context": private_chunks,
+        "audio_script": None,
+        "audio_path": None,
         "status_message": "Initializing research graph..."
     }
     
@@ -168,7 +189,7 @@ def run_research(topic: str, max_iterations: int = 1):
     
     # Display preview
     console.print(Panel(Markdown(final_report[:1200] + "\n\n*(Truncated in terminal preview -- see full report in output directory)*"), title="[Report Preview]", border_style="green"))
-    console.print(f"[bold yellow]Exports Generated:[/bold yellow] Markdown (.md), Adobe PDF (.pdf), Word (.docx) in [link=file://{OUTPUT_DIR.resolve()}]{OUTPUT_DIR.resolve()}[/link]\n")
+    console.print(f"[bold yellow]Exports Generated:[/bold yellow] Markdown (.md), Adobe PDF (.pdf), Word (.docx), Audio Podcast (.mp3) in [link=file://{OUTPUT_DIR.resolve()}]{OUTPUT_DIR.resolve()}[/link]\n")
 
 def main():
     print_banner()
@@ -176,10 +197,11 @@ def main():
     parser = argparse.ArgumentParser(description="Autonomous Deep Research Agent with LangGraph & NVIDIA")
     parser.add_argument("--topic", type=str, help="Research topic to investigate")
     parser.add_argument("--max-iters", type=int, default=1, help="Maximum critique reflection iterations (default: 1)")
+    parser.add_argument("--docs", nargs="*", help="Optional path(s) to internal documents to ingest into research context (PDF, DOCX, TXT, MD)")
     args = parser.parse_args()
     
     if args.topic:
-        run_research(args.topic, max_iterations=args.max_iters)
+        run_research(args.topic, max_iterations=args.max_iters, doc_paths=args.docs)
     else:
         console.print("[bold]Choose an option:[/bold]")
         console.print("  [cyan]0.[/cyan] Enter your own custom research topic")
@@ -197,7 +219,7 @@ def main():
             console.print("[red]Topic cannot be empty. Exiting.[/red]")
             return
             
-        run_research(topic, max_iterations=args.max_iters)
+        run_research(topic, max_iterations=args.max_iters, doc_paths=args.docs)
 
 if __name__ == "__main__":
     main()
