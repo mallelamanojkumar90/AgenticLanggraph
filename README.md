@@ -13,9 +13,9 @@ flowchart TD
     Start([User Topic]) --> Planner["1. Planner Node<br/>(Decomposes into sub-topics & queries)"]
     Planner --> FanOut{"Parallel Fan-out<br/>(LangGraph Send API)"}
     
-    FanOut --> Worker1["Researcher: Area 1<br/>(DuckDuckGo Search + Synthesis)"]
-    FanOut --> Worker2["Researcher: Area 2<br/>(DuckDuckGo Search + Synthesis)"]
-    FanOut --> WorkerN["Researcher: Area N<br/>(DuckDuckGo Search + Synthesis)"]
+    FanOut --> Worker1["Researcher: Area 1<br/>(DuckDuckGo + Deep Web Scraping)"]
+    FanOut --> Worker2["Researcher: Area 2<br/>(DuckDuckGo + Deep Web Scraping)"]
+    FanOut --> WorkerN["Researcher: Area N<br/>(DuckDuckGo + Deep Web Scraping)"]
     
     Worker1 --> Aggregator["State Reducer<br/>(operator.add merge)"]
     Worker2 --> Aggregator
@@ -24,9 +24,11 @@ flowchart TD
     Aggregator --> Reviewer{"2. Critic Node<br/>(Is research complete?)"}
     
     Reviewer -- "Needs more depth (if under max iterations)" --> FanOut
-    Reviewer -- "Approved" --> Writer["3. Writer Node<br/>(Executive Markdown Report)"]
-    Writer --> End([Saved to output/])
+    Reviewer -- "Approved" --> Writer["3. Writer Node<br/>(Executive Synthesis & Diagrams)"]
+    Writer --> Verifier["4. Verifier Node<br/>(Citation Grounding & Fact Audit)"]
+    Verifier --> End([Saved to output/ as MD, PDF, DOCX])
 ```
+
 
 ---
 
@@ -106,18 +108,22 @@ Generated reports are automatically formatted in GitHub-flavored Markdown with c
 AgenticLanggraph/
 ├── .env.example           # Example environment variables
 ├── requirements.txt       # Dependencies
-├── main.py                # Main entry point
+├── main.py                # Main CLI entry point
+├── streamlit_app.py       # Full-featured Streamlit Dashboard & Chat UI
 ├── src/
 │   ├── config.py          # Settings & NVIDIA NIM client configuration
 │   ├── state.py           # TypedDict states & Pydantic output schemas
 │   ├── tools/
-│   │   └── search.py      # Resilient DuckDuckGo web search tool
+│   │   ├── search.py      # Resilient DuckDuckGo web search tool
+│   │   ├── scraper.py     # Dual-tier web scraper (Jina Reader + direct lxml)
+│   │   └── exporter.py    # Multi-format exporter (PDF, Word .docx, Mermaid)
 │   ├── nodes/
 │   │   ├── planner.py     # Decomposes queries into structured subtopics
-│   │   ├── researcher.py  # Map-worker node searching & synthesizing
+│   │   ├── researcher.py  # Map-worker node searching, scraping & synthesizing
 │   │   ├── reviewer.py    # Critic node evaluating thoroughness & gaps
-│   │   └── writer.py      # Executive report synthesizer
+│   │   ├── writer.py      # Executive report synthesizer
+│   │   └── verifier.py    # Citation grounding & hallucination auditing node
 │   ├── graph.py           # LangGraph StateGraph assembly & Send API routing
 │   └── cli.py             # Rich terminal UI & streaming execution
-└── output/                # Markdown reports destination
+└── output/                # Markdown (.md), PDF (.pdf), Word (.docx), & checkpoints.db
 ```

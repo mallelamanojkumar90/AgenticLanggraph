@@ -47,4 +47,8 @@ class ResearchState(TypedDict):
     review_feedback: str
     gap_queries: List[SubTopicPlan]
     final_report: str
+    verification_score: float
+    verification_feedback: str
+    verified_sources_count: int
+    flagged_sources_count: int
     status_message: str

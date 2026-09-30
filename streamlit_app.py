@@ -13,6 +13,7 @@ load_dotenv(ROOT_DIR / ".env")
 
 from src.config import NVIDIA_API_KEY, DEFAULT_MODEL, OUTPUT_DIR
 from src.graph import build_research_graph
+from src.tools.exporter import markdown_to_pdf_bytes, markdown_to_docx_bytes
 
 st.set_page_config(
     page_title="Deep Research Agent | LangGraph + NVIDIA NIM",
@@ -96,6 +97,12 @@ with st.sidebar:
     )
     os.environ["MAX_SEARCH_RESULTS_PER_QUERY"] = str(max_search_results)
     
+    enable_hitl = st.checkbox(
+        "⏸️ Human-in-the-Loop Plan Review",
+        value=False,
+        help="Pause after Planner to inspect research subtopics before web research begins"
+    )
+    
     st.divider()
     
     # Past Reports Archive
@@ -110,13 +117,30 @@ with st.sidebar:
         report_path = OUTPUT_DIR / selected_report
         with open(report_path, "r", encoding="utf-8") as f:
             content = f.read()
-        st.download_button(
-            label="⬇️ Download Markdown",
-            data=content,
-            file_name=selected_report,
-            mime="text/markdown",
-            key="side_dl"
-        )
+            
+        b1, b2 = st.columns(2)
+        with b1:
+            st.download_button(
+                label="⬇️ Markdown",
+                data=content,
+                file_name=selected_report,
+                mime="text/markdown",
+                key="side_dl_md",
+                use_container_width=True
+            )
+        with b2:
+            try:
+                pdf_data = markdown_to_pdf_bytes(content)
+                st.download_button(
+                    label="⬇️ PDF",
+                    data=pdf_data,
+                    file_name=selected_report.replace(".md", ".pdf"),
+                    mime="application/pdf",
+                    key="side_dl_pdf",
+                    use_container_width=True
+                )
+            except Exception:
+                pass
     else:
         st.caption("No reports generated yet.")
 
@@ -161,7 +185,11 @@ if start_research:
     
     # Real-time Execution Flow Container
     with st.status("Initializing LangGraph Multi-Agent Workflow...", expanded=True) as status_box:
-        app = build_research_graph(enable_memory=True)
+        app = build_research_graph(
+            enable_memory=True,
+            persistent=True,
+            interrupt_before=["researcher"] if enable_hitl else None
+        )
         thread_id = str(uuid.uuid4())
         config = {"configurable": {"thread_id": thread_id}}
         
@@ -176,6 +204,10 @@ if start_research:
             "review_feedback": "",
             "gap_queries": [],
             "final_report": "",
+            "verification_score": 100.0,
+            "verification_feedback": "",
+            "verified_sources_count": 0,
+            "flagged_sources_count": 0,
             "status_message": "Initializing..."
         }
         
@@ -183,6 +215,7 @@ if start_research:
         plan_placeholder = st.empty()
         research_placeholder = st.container()
         review_placeholder = st.empty()
+        verifier_placeholder = st.empty()
         
         for event in app.stream(initial_state, config=config, stream_mode="updates"):
             for node_name, node_update in event.items():
@@ -204,8 +237,9 @@ if start_research:
                     data = node_update.get("sections_data", [])
                     if data:
                         latest = data[-1]
+                        num_scraped = sum(1 for src in latest.get('sources', []) if src.get('scraped'))
                         with research_placeholder:
-                            st.info(f"✅ **Completed Section:** {latest.get('section_title')} — Cited {len(latest.get('sources', []))} sources")
+                            st.info(f"✅ **Completed Section:** {latest.get('section_title')} — {len(latest.get('sources', []))} sources ({num_scraped} full web pages scraped)")
                             
                 elif node_name == "reviewer":
                     is_suff = node_update.get("is_sufficient", True)
@@ -218,43 +252,84 @@ if start_research:
                         review_placeholder.warning(f"⚖️ **Reviewer Gaps Detected:** {node_update.get('review_feedback')}")
                         
                 elif node_name == "writer":
-                    status_box.update(label="✅ **Research Completed & Report Generated!**", state="complete")
+                    status_box.update(label="🛡️ **Stage 4:** Report written! Verifying factual citations & links...")
+                    
+                elif node_name == "verifier":
+                    score = node_update.get("verification_score", 100.0)
+                    feedback = node_update.get("verification_feedback", "")
+                    verifier_placeholder.success(f"🛡️ **Fact-Check & Citation Audit ({score:.1f}%):** {feedback}")
+                    status_box.update(label="✅ **Research, Synthesis & Fact-Checking Complete!**", state="complete")
 
         # Snapshot final state
         state_snapshot = app.get_state(config)
         st.session_state["latest_research"] = state_snapshot.values
+        st.session_state["chat_messages"] = []
 
 # --- DISPLAY RESULTS TABS ---
 if "latest_research" in st.session_state:
     res = st.session_state["latest_research"]
     final_report = res.get("final_report", "")
     sections_data = res.get("sections_data", [])
+    v_score = res.get("verification_score", 100.0)
     
     st.divider()
     
     # Quick metrics header
     total_sources = sum(len(s.get("sources", [])) for s in sections_data)
+    total_scraped = sum(sum(1 for src in s.get("sources", []) if src.get("scraped")) for s in sections_data)
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Sections Researched", len(sections_data))
-    m2.metric("Total Sources Cited", total_sources)
+    m2.metric("Total Sources", f"{total_sources} ({total_scraped} scraped)")
     m3.metric("Review Iterations", res.get("critique_iteration", 1))
-    m4.metric("LLM Provider", "NVIDIA NIM (Llama 3.2)")
+    m4.metric("Citation Grounding", f"{v_score:.1f}%")
     
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📑 Executive Report",
         "🔬 Sub-Section Notes",
         "🌐 Sources & Citations",
-        "⚙️ Graph State Inspector"
+        "⚙️ Graph State Inspector",
+        "💬 Chat with Report"
     ])
     
     with tab1:
-        st.download_button(
-            label="⬇️ Download Full Markdown Report",
-            data=final_report,
-            file_name=f"research_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
-            mime="text/markdown",
-            key="main_dl"
-        )
+        d1, d2, d3 = st.columns(3)
+        timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+        with d1:
+            st.download_button(
+                label="⬇️ Download Markdown (.md)",
+                data=final_report,
+                file_name=f"research_{timestamp_str}.md",
+                mime="text/markdown",
+                key="main_dl_md",
+                use_container_width=True
+            )
+        with d2:
+            try:
+                pdf_data = markdown_to_pdf_bytes(final_report)
+                st.download_button(
+                    label="⬇️ Download PDF (.pdf)",
+                    data=pdf_data,
+                    file_name=f"research_{timestamp_str}.pdf",
+                    mime="application/pdf",
+                    key="main_dl_pdf",
+                    use_container_width=True
+                )
+            except Exception as e:
+                st.caption(f"PDF error: {e}")
+        with d3:
+            try:
+                docx_data = markdown_to_docx_bytes(final_report)
+                st.download_button(
+                    label="⬇️ Download Word (.docx)",
+                    data=docx_data,
+                    file_name=f"research_{timestamp_str}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key="main_dl_docx",
+                    use_container_width=True
+                )
+            except Exception as e:
+                st.caption(f"DOCX error: {e}")
+                
         st.markdown(final_report)
         
     with tab2:
@@ -275,8 +350,10 @@ if "latest_research" in st.session_state:
                     
         st.write(f"Total Unique Sources Found: **{len(all_unique_sources)}**")
         for url, src in all_unique_sources.items():
-            st.markdown(f"- **[{src.get('title', url)}]({url})**")
-            st.caption(f"Excerpt: {src.get('snippet', '')[:250]}...")
+            badge = "🟢 **[Full Page Scraped]**" if src.get("scraped") else "⚪ **[Search Snippet]**"
+            st.markdown(f"- {badge} [{src.get('title', url)}]({url})")
+            excerpt = src.get('content_preview', src.get('snippet', ''))[:300]
+            st.caption(f"Content Sample: {excerpt}...")
             
     with tab4:
         st.json({
@@ -285,5 +362,41 @@ if "latest_research" in st.session_state:
             "critique_iteration": res.get("critique_iteration"),
             "is_sufficient": res.get("is_sufficient"),
             "review_feedback": res.get("review_feedback"),
+            "verification_score": res.get("verification_score"),
+            "verification_feedback": res.get("verification_feedback"),
             "sections_count": len(sections_data)
         })
+        
+    with tab5:
+        st.subheader("💬 Ask Follow-up Questions About This Research")
+        st.caption("Converse with the synthesized evidence directly without re-running the full research pipeline.")
+        
+        for msg in st.session_state.get("chat_messages", []):
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                
+        if user_prompt := st.chat_input("Ask a follow-up question about this topic..."):
+            st.session_state["chat_messages"].append({"role": "user", "content": user_prompt})
+            with st.chat_message("user"):
+                st.markdown(user_prompt)
+                
+            with st.chat_message("assistant"):
+                from langchain_core.messages import SystemMessage, HumanMessage
+                from src.config import get_llm
+                llm = get_llm(temperature=0.2)
+                sys_msg = (
+                    "You are a Senior Research Analyst. Answer the user's question accurately using only "
+                    "the provided verified research report and accumulated evidence. Cite section headings "
+                    "or source URLs where applicable.\n\n"
+                    f"RESEARCH REPORT:\n{final_report}"
+                )
+                try:
+                    resp = llm.invoke([
+                        SystemMessage(content=sys_msg),
+                        HumanMessage(content=user_prompt)
+                    ])
+                    ans = resp.content
+                except Exception as e:
+                    ans = f"Error generating answer: {e}"
+                st.markdown(ans)
+                st.session_state["chat_messages"].append({"role": "assistant", "content": ans})

@@ -101,11 +101,12 @@ def run_research(topic: str, max_iterations: int = 1):
                     data = node_update.get("sections_data", [])
                     if data:
                         latest_section = data[-1]
+                        num_scraped = sum(1 for src in latest_section.get("sources", []) if src.get("scraped"))
                         progress.update(
                             task_id,
                             description=f"Synthesized notes for: '{latest_section.get('section_title')}'"
                         )
-                        console.print(f"  [cyan][+] Researched:[/cyan] {latest_section.get('section_title')} ([dim]{len(latest_section.get('sources', []))} sources cited[/dim])")
+                        console.print(f"  [cyan][+] Researched:[/cyan] {latest_section.get('section_title')} ([dim]{len(latest_section.get('sources', []))} sources, {num_scraped} deep scraped[/dim])")
                         
                 elif node_name == "reviewer":
                     is_suff = node_update.get("is_sufficient", True)
@@ -118,7 +119,15 @@ def run_research(topic: str, max_iterations: int = 1):
                         console.print(f"\n[bold yellow][!] Reviewer Feedback:[/bold yellow] {node_update.get('review_feedback')}")
                         
                 elif node_name == "writer":
-                    progress.update(task_id, description="Report completed!")
+                    progress.update(task_id, description="Report synthesized! Auditing citations with Verifier node...")
+                    console.print("\n[bold green][+] Executive Report Synthesized (MD, PDF, DOCX generated)[/bold green]")
+                    
+                elif node_name == "verifier":
+                    progress.update(task_id, description="Fact-checking complete!")
+                    v_score = node_update.get("verification_score", 100.0)
+                    v_feedback = node_update.get("verification_feedback", "")
+                    color = "green" if v_score >= 80 else ("yellow" if v_score >= 60 else "red")
+                    console.print(f"[bold {color}][+] Citation Audit:[/bold {color}] {v_feedback}")
                     final_state = node_update
                     
         progress.stop()
@@ -127,28 +136,39 @@ def run_research(topic: str, max_iterations: int = 1):
     state_snapshot = app.get_state(config)
     final_report = state_snapshot.values.get("final_report", "")
     sections_data = state_snapshot.values.get("sections_data", [])
+    v_score = state_snapshot.values.get("verification_score", 100.0)
+    v_feedback = state_snapshot.values.get("verification_feedback", "")
     
     # Summary table
     table = Table(title="Research Summary", show_header=True, header_style="bold magenta")
     table.add_column("Subtopic", style="dim")
     table.add_column("Queries Run", justify="right")
-    table.add_column("Sources Analyzed", justify="right")
+    table.add_column("Total Sources", justify="right")
+    table.add_column("Deep Scraped", justify="right")
     
     total_sources = 0
+    total_scraped = 0
     for s in sections_data:
-        num_sources = len(s.get("sources", []))
+        sources = s.get("sources", [])
+        num_sources = len(sources)
+        num_scraped = sum(1 for src in sources if src.get("scraped"))
         total_sources += num_sources
+        total_scraped += num_scraped
         table.add_row(
             s.get("section_title", "N/A"),
             str(len(s.get("queries_run", []))),
-            str(num_sources)
+            str(num_sources),
+            f"[green]{num_scraped}[/green]"
         )
     console.print(table)
-    console.print(f"[bold green]Total Sources Analyzed & Synthesized:[/bold green] {total_sources}\n")
+    console.print(f"[bold green]Total Sources Analyzed:[/bold green] {total_sources} ([cyan]{total_scraped} full pages scraped[/cyan])")
+    
+    score_color = "green" if v_score >= 80 else ("yellow" if v_score >= 60 else "red")
+    console.print(f"[bold {score_color}]Citation Grounding Score:[/bold {score_color}] {v_score:.1f}% ({v_feedback})\n")
     
     # Display preview
     console.print(Panel(Markdown(final_report[:1200] + "\n\n*(Truncated in terminal preview -- see full report in output directory)*"), title="[Report Preview]", border_style="green"))
-    console.print(f"[bold yellow]Full Markdown Report saved in:[/bold yellow] {OUTPUT_DIR.resolve()}\n")
+    console.print(f"[bold yellow]Exports Generated:[/bold yellow] Markdown (.md), Adobe PDF (.pdf), Word (.docx) in [link=file://{OUTPUT_DIR.resolve()}]{OUTPUT_DIR.resolve()}[/link]\n")
 
 def main():
     print_banner()

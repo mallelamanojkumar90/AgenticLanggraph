@@ -84,18 +84,41 @@ This report provides an in-depth synthesis of {topic}, compiled from multi-agent
 {sources_summary}
 """
     
-    # Save report to output directory
+    # Append auto-generated Mermaid architecture map
+    from src.tools.exporter import generate_mermaid_diagram, markdown_to_pdf_bytes, markdown_to_docx_bytes
+    mermaid_block = generate_mermaid_diagram(topic, sections_data)
+    if "## Research Architecture & Thematic Map" not in report_content:
+        report_content += f"\n\n## Research Architecture & Thematic Map\n\n{mermaid_block}\n"
+    
+    # Save report to output directory in Markdown, PDF, and DOCX formats
     slug = re.sub(r'[^a-zA-Z0-9_-]', '_', topic.lower()[:40]).strip('_')
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"research_{slug}_{timestamp}.md"
-    file_path = OUTPUT_DIR / filename
+    base_name = f"research_{slug}_{timestamp}"
     
-    with open(file_path, "w", encoding="utf-8") as f:
+    md_path = OUTPUT_DIR / f"{base_name}.md"
+    with open(md_path, "w", encoding="utf-8") as f:
         f.write(report_content)
-        
-    logger.info(f"Research report saved to {file_path}")
+    logger.info(f"Research report saved to {md_path}")
     
+    # Save PDF
+    try:
+        pdf_path = OUTPUT_DIR / f"{base_name}.pdf"
+        with open(pdf_path, "wb") as f:
+            f.write(markdown_to_pdf_bytes(report_content))
+        logger.info(f"PDF report saved to {pdf_path}")
+    except Exception as e:
+        logger.warning(f"Could not generate PDF: {e}")
+        
+    # Save DOCX
+    try:
+        docx_path = OUTPUT_DIR / f"{base_name}.docx"
+        with open(docx_path, "wb") as f:
+            f.write(markdown_to_docx_bytes(report_content))
+        logger.info(f"DOCX report saved to {docx_path}")
+    except Exception as e:
+        logger.warning(f"Could not generate DOCX: {e}")
+        
     return {
         "final_report": report_content,
-        "status_message": f"Report generated and saved to {file_path.name}"
+        "status_message": f"Report generated and saved to {md_path.name} (MD, PDF, DOCX)"
     }

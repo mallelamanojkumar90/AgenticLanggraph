@@ -2,6 +2,7 @@ import logging
 from langchain_core.messages import SystemMessage, HumanMessage
 from src.config import get_llm, MAX_SEARCH_RESULTS
 from src.tools.search import search_web
+from src.tools.scraper import scrape_multiple_webpages
 from src.state import SubTopicTask, SectionData
 
 logger = logging.getLogger(__name__)
@@ -17,7 +18,7 @@ Guidelines:
 """
 
 def conduct_research(task: SubTopicTask) -> dict:
-    """Worker node: Runs parallel search queries for a sub-topic and synthesizes findings into notes."""
+    """Worker node: Runs parallel search queries for a sub-topic, scrapes full content from top sources, and synthesizes findings."""
     title = task.get("section_title", "Untitled Section")
     description = task.get("description", "")
     queries = task.get("queries", [])
@@ -26,9 +27,8 @@ def conduct_research(task: SubTopicTask) -> dict:
     
     all_sources = []
     seen_urls = set()
-    collected_snippets = []
     
-    # Run search for each query
+    # 1. Run search for each query
     for q in queries:
         results = search_web(q, max_results=2)
         for r in results:
@@ -36,15 +36,34 @@ def conduct_research(task: SubTopicTask) -> dict:
             if url not in seen_urls:
                 seen_urls.add(url)
                 all_sources.append(r)
-                # Keep snippet compact to ensure fast LLM inference
-                clean_snippet = r['snippet'][:300].strip()
-                collected_snippets.append(
-                    f"- **{r['title']}** ({r['url']}): {clean_snippet}"
-                )
-                if len(collected_snippets) >= 6:
+                if len(all_sources) >= 5:
                     break
-        if len(collected_snippets) >= 6:
+        if len(all_sources) >= 5:
             break
+            
+    # 2. Deep scrape the top URLs for full-text context
+    urls_to_scrape = [s["url"] for s in all_sources[:3]]
+    scraped_data = scrape_multiple_webpages(urls_to_scrape, max_chars_per_page=1200)
+    logger.info(f"Deep scraped {len(scraped_data)}/{len(urls_to_scrape)} web pages for section '{title}'")
+    
+    # 3. Assemble evidence blocks combining scraped text and fallback snippets
+    collected_snippets = []
+    for r in all_sources:
+        url = r["url"]
+        scraped_text = scraped_data.get(url, "")
+        if scraped_text:
+            r["scraped"] = True
+            r["content_preview"] = scraped_text[:300]
+            collected_snippets.append(
+                f"- **{r['title']}** ({url}) [DEEP INGESTED]:\n  {scraped_text}"
+            )
+        else:
+            r["scraped"] = False
+            clean_snippet = r.get("snippet", "")[:300].strip()
+            r["content_preview"] = clean_snippet
+            collected_snippets.append(
+                f"- **{r['title']}** ({url}) [SEARCH SNIPPET]:\n  {clean_snippet}"
+            )
     
     # Synthesize findings with LLM
     if not collected_snippets:

@@ -1,14 +1,19 @@
 import logging
-from typing import List, Union
+import sqlite3
+from pathlib import Path
+from typing import List, Optional, Union
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Send
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 
+from src.config import OUTPUT_DIR
 from src.state import ResearchState, SubTopicTask
 from src.nodes.planner import plan_research
 from src.nodes.researcher import conduct_research
 from src.nodes.reviewer import review_research
 from src.nodes.writer import synthesize_report
+from src.nodes.verifier import verify_report
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +50,13 @@ def route_after_review(state: ResearchState) -> Union[str, List[Send]]:
         for gap in gap_queries
     ]
 
-def build_research_graph(enable_memory: bool = True):
-    """Builds and compiles the complete Deep Research LangGraph workflow."""
+def build_research_graph(
+    enable_memory: bool = True,
+    persistent: bool = True,
+    db_path: Optional[Union[str, Path]] = None,
+    interrupt_before: Optional[List[str]] = None
+):
+    """Builds and compiles the complete Deep Research LangGraph workflow with verification and persistent checkpoints."""
     builder = StateGraph(ResearchState)
     
     # 1. Add core nodes
@@ -54,15 +64,25 @@ def build_research_graph(enable_memory: bool = True):
     builder.add_node("researcher", conduct_research)
     builder.add_node("reviewer", review_research)
     builder.add_node("writer", synthesize_report)
+    builder.add_node("verifier", verify_report)
     
     # 2. Add edges & dynamic map-reduce branching
     builder.add_edge(START, "planner")
     builder.add_conditional_edges("planner", fan_out_research, ["researcher"])
     builder.add_edge("researcher", "reviewer")
     builder.add_conditional_edges("reviewer", route_after_review, ["writer", "researcher"])
-    builder.add_edge("writer", END)
+    builder.add_edge("writer", "verifier")
+    builder.add_edge("verifier", END)
     
-    checkpointer = MemorySaver() if enable_memory else None
-    graph = builder.compile(checkpointer=checkpointer)
-    
-    return graph
+    checkpointer = None
+    if enable_memory:
+        if persistent:
+            target_db = Path(db_path) if db_path else (OUTPUT_DIR / "checkpoints.db")
+            conn = sqlite3.connect(str(target_db), check_same_thread=False)
+            checkpointer = SqliteSaver(conn)
+            checkpointer.setup()
+        else:
+            checkpointer = MemorySaver()
+            
+    return builder.compile(checkpointer=checkpointer, interrupt_before=interrupt_before)
+
